@@ -182,24 +182,22 @@ class TensorDMDFeatureExtractor:
 		self.top_modes = top_modes
 
 	def transform(self, window: NDArray[np.float64]) -> NDArray[np.float64]:
-		r"""Return a 1D feature vector for the provided window following DMD.
+		r"""Compute Dynamic Mode Decomposition features for a time window.
 
-		The algorithm unfolds as:
+		Method overview:
 
-		1. Arrange consecutive measurements as two time-shifted snapshot matrices
-		   $X$ and $Y$ such that $Y \approx A X$, where $A$ captures the linear
-		   evolution across one time-step.
-		2. Compress $X$ via a rank-$r$ Singular Value Decomposition (SVD) to obtain
-		   an orthonormal basis that explains the dominant energy in the data.
-		3. Build the reduced operator $\tilde{A} = U_r^\top Y V_r \Sigma_r^{-1}$
-		   which is the similarity transform of $A$ expressed in the low-dimensional
-		   coordinates.
-		4. Solve the eigen decomposition of $\tilde{A}$ to recover eigenvalues
-		   (temporal frequencies / growth rates) and eigenvectors. Lift the modes
-		   back to the original space to obtain DMD modes.
-		5. Derive descriptive statistics (eigenvalue parts, modal amplitudes,
-		   reconstruction error, and basic temporal summaries) that serve as the
-		   engineered features for classification.
+		1. Build two snapshot matrices, X and Y, containing successive observations
+		   that differ by one timestep so that Y represents the future state of X.
+		2. Perform a rank-r singular value decomposition (SVD) of X to isolate the
+		   dominant spatial patterns in an orthonormal basis.
+		3. Form the reduced linear model A_tilde = U_r.T @ Y @ V_r @ Sigma_r^{-1},
+		   which describes the dynamics in the low-dimensional subspace.
+		4. Solve the eigenvalue problem for A_tilde to obtain characteristic
+		   frequencies/growth rates and lift the corresponding modes back to the
+		   original feature space.
+		5. Summarise the modal behaviour (eigenvalues, amplitudes, reconstruction
+		   error) together with simple window statistics to provide classifier-ready
+		   features.
 		"""
 
 		if window.ndim != 2:
@@ -232,14 +230,14 @@ class TensorDMDFeatureExtractor:
 		V_r = Vh.conj().T[:, :r]
 
 		# STEP 3 -------------------------------------------------------------
-		# Assemble the reduced-order linear operator \tilde{A} that advances the
+		# Assemble the reduced-order linear operator (A_tilde) that advances the
 		# system dynamics in the subspace spanned by U_r.
 		S_inv = np.diag(1.0 / S_r)
 		A_tilde = U_r.T @ Y @ V_r @ S_inv
 		eigvals, eigvecs = np.linalg.eig(A_tilde)
 
 		# STEP 4 -------------------------------------------------------------
-		# Sort the eigenpairs by magnitude |λ| to prioritise dynamically dominant
+		# Sort the eigenpairs by their magnitude to emphasise dynamically dominant
 		# modes. Pull the DMD modes back into the original feature space.
 		order = np.argsort(-np.abs(eigvals))
 		eigvals = eigvals[order]
