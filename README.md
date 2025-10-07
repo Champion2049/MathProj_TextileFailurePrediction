@@ -4,18 +4,22 @@ This project implements a **tensor-based Dynamic Mode Decomposition (DMD)** feat
 extractor on top of the provided textile machine telemetry. Sliding temporal
 windows are lifted into a tensor representation, dominant spatio-temporal modes
 are distilled via DMD, and their descriptors feed a downstream classifier to
-predict *Failure* vs *No Failure* states.
+predict *Failure* vs *No Failure* states. Every stage (PCA + DMD) is derived
+step-by-step from first principles with rich inline commentary.
 
 ## How it works
 
 1. **Pre-processing** – The CSV is chronologically ordered, machine identifiers
    and timestamps are discarded, numerical sensors are standardised, and
    machine types are one-hot encoded.
-2. **Tensor windowing** – Consecutive snapshots (default: 12 timesteps) form a
+2. **PCA from scratch** – The centred feature matrix undergoes an eigenvalue
+   analysis of its covariance matrix to retain the dominant principal components
+   (by variance threshold or explicit count).
+3. **Tensor windowing** – Consecutive snapshots (default: 12 timesteps) form a
    third-order tensor capturing the evolving machine state.
-3. **Dynamic Mode Decomposition** – Each tensor window is decomposed, exposing
+4. **Dynamic Mode Decomposition** – Each tensor window is decomposed, exposing
    dominant eigen-dynamics, modal amplitudes, and reconstruction residuals.
-4. **Classification** – The engineered features feed configurable classifiers
+5. **Classification** – The engineered features feed configurable classifiers
    (logistic regression, gradient boosting, or random forest) that report
    accuracy, F1, ROC-AUC, and full diagnostics.
 
@@ -42,6 +46,9 @@ python DMD_Tensor.py --data-path textile_machine_data.csv
 - `--test-size` *(float, default: 0.2)* – evaluation split ratio.
 - `--classifier {logreg|gradient_boosting|random_forest}` – choose the downstream
    estimator.
+- `--no-pca` – disable the handcrafted PCA stage.
+- `--pca-components` / `--pca-variance` – control the dimensionality preserved by
+   the PCA projection (defaults to 95% cumulative variance).
 - `--grid-search` – enable cross-validated hyperparameter tuning for the chosen
    classifier.
 - `--export-features path/to/file.csv` – persist the engineered DMD feature

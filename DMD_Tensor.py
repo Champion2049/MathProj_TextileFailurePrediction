@@ -55,8 +55,114 @@ class DMDTensorConfig:
 	random_state: int = 42
 	classifier: str = "logreg"
 	grid_search: bool = False
+	use_pca: bool = True
+	pca_components: Optional[int] = None
+	pca_variance_ratio: float = 0.95
 	export_features_path: Optional[Path] = None
 	export_model_path: Optional[Path] = None
+
+
+@dataclass
+class PCAProjection:
+	"""Container for the ingredients of a PCA projection learned from scratch."""
+
+	mean_vector: NDArray[np.float64]
+	components: NDArray[np.float64]
+	explained_variance: NDArray[np.float64]
+	explained_variance_ratio: NDArray[np.float64]
+
+
+class PCAFromScratch:
+	r"""Principal Component Analysis solved via covariance eigen-decomposition.
+
+	Step-by-step outline:
+	1. Centre the feature matrix so every column has zero empirical mean.
+	2. Estimate the covariance matrix using the unbiased formula
+	   (1 / (N - 1)) * X_c^T X_c where X_c denotes the centred data.
+	3. Solve the eigenvalue problem to obtain principal directions and the
+	   amount of variance each direction explains.
+	4. Project the centred data onto the leading eigenvectors to form the
+	   decorrelated principal components.
+	"""
+
+	def __init__(
+		self,
+		n_components: Optional[int] = None,
+		variance_ratio: Optional[float] = None,
+	) -> None:
+		if n_components is not None and n_components <= 0:
+			raise ValueError("n_components must be positive if supplied")
+		if variance_ratio is not None and not (0.0 < variance_ratio <= 1.0):
+			raise ValueError("variance_ratio must lie in (0, 1]")
+
+		self.n_components = n_components
+		self.variance_ratio = variance_ratio
+		self.projection_: Optional[PCAProjection] = None
+
+	# ------------------------------------------------------------------
+	# Fitting phase
+	# ------------------------------------------------------------------
+	def fit(self, X: NDArray[np.float64]) -> "PCAFromScratch":
+		if X.ndim != 2:
+			raise ValueError("PCA expects a 2D matrix of shape (n_samples, n_features)")
+
+		# 1. Centre the data so every feature has zero empirical mean.
+		mean_vector = X.mean(axis=0)
+		X_centered = X - mean_vector
+
+		# 2. Estimate the covariance matrix via the unbiased estimator.
+		#    Sigma = (1 / (N-1)) * X_c^T X_c
+		n_samples = X.shape[0]
+		if n_samples < 2:
+			raise ValueError("At least two samples are required to compute covariance")
+		covariance_matrix = (X_centered.T @ X_centered) / (n_samples - 1)
+
+		# 3. Decompose the symmetric covariance matrix. eigh() exploits symmetry
+		#    and guarantees sorted real eigenvalues / eigenvectors.
+		eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+
+		# 4. Sort the eigenpairs from largest eigenvalue to smallest to prioritise
+		#    directions with maximal variance conservation.
+		sort_indices = np.argsort(eigenvalues)[::-1]
+		eigenvalues = eigenvalues[sort_indices]
+		eigenvectors = eigenvectors[:, sort_indices]
+
+		# 5. Determine how many components to keep either by explicit count or
+		#    cumulative explained variance threshold.
+		if self.n_components is not None:
+			k = min(self.n_components, eigenvectors.shape[1])
+		elif self.variance_ratio is not None:
+			cumulative = np.cumsum(eigenvalues) / eigenvalues.sum()
+			k = int(np.searchsorted(cumulative, self.variance_ratio) + 1)
+		else:
+			k = eigenvectors.shape[1]
+
+		components = eigenvectors[:, :k]
+		explained_variance = eigenvalues[:k]
+		explained_variance_ratio = explained_variance / eigenvalues.sum()
+
+		self.projection_ = PCAProjection(
+			mean_vector=mean_vector.astype(np.float64),
+			components=components.astype(np.float64),
+			explained_variance=explained_variance.astype(np.float64),
+			explained_variance_ratio=explained_variance_ratio.astype(np.float64),
+		)
+		return self
+
+	# ------------------------------------------------------------------
+	# Transformation phase
+	# ------------------------------------------------------------------
+	def transform(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+		if self.projection_ is None:
+			raise RuntimeError("PCA must be fitted before calling transform")
+
+		# Project the centred observations onto the retained principal directions.
+		X_centered = X - self.projection_.mean_vector
+		return X_centered @ self.projection_.components
+
+	def fit_transform(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+		return self.fit(X).transform(X)
+
 
 
 # ---------------------------------------------------------------------------
@@ -76,14 +182,24 @@ class TensorDMDFeatureExtractor:
 		self.top_modes = top_modes
 
 	def transform(self, window: NDArray[np.float64]) -> NDArray[np.float64]:
-		"""Return a 1D feature vector for the provided window.
+		r"""Return a 1D feature vector for the provided window following DMD.
 
-		Parameters
-		----------
-		window:
-			Array of shape (window_size, n_features) describing sequential
-			telemetry snapshots. The last row represents the most recent
-			observation in the window.
+		The algorithm unfolds as:
+
+		1. Arrange consecutive measurements as two time-shifted snapshot matrices
+		   $X$ and $Y$ such that $Y \approx A X$, where $A$ captures the linear
+		   evolution across one time-step.
+		2. Compress $X$ via a rank-$r$ Singular Value Decomposition (SVD) to obtain
+		   an orthonormal basis that explains the dominant energy in the data.
+		3. Build the reduced operator $\tilde{A} = U_r^\top Y V_r \Sigma_r^{-1}$
+		   which is the similarity transform of $A$ expressed in the low-dimensional
+		   coordinates.
+		4. Solve the eigen decomposition of $\tilde{A}$ to recover eigenvalues
+		   (temporal frequencies / growth rates) and eigenvectors. Lift the modes
+		   back to the original space to obtain DMD modes.
+		5. Derive descriptive statistics (eigenvalue parts, modal amplitudes,
+		   reconstruction error, and basic temporal summaries) that serve as the
+		   engineered features for classification.
 		"""
 
 		if window.ndim != 2:
@@ -91,11 +207,16 @@ class TensorDMDFeatureExtractor:
 		if window.shape[0] < 3:
 			raise ValueError("window must contain at least 3 timesteps for DMD")
 
-		# Separate snapshots for DMD (columns are successive system states)
+		# STEP 1 -------------------------------------------------------------
+		# Build the pair of snapshot matrices X and Y by shifting the temporal
+		# window by one time-step. Each column captures the state at time k.
 		X = window[:-1].T  # shape: (n_features, window_size - 1)
 		Y = window[1:].T   # shape: (n_features, window_size - 1)
 
 		try:
+			# STEP 2 ---------------------------------------------------------
+			# Compute the compact SVD of X = U Σ V^H. The singular values quantify
+			# the energy carried by each orthogonal direction in the data.
 			U, singular_vals, Vh = np.linalg.svd(X, full_matrices=False)
 		except np.linalg.LinAlgError:
 			# In degenerate cases fall back to zeros while keeping output shape stable
@@ -105,22 +226,30 @@ class TensorDMDFeatureExtractor:
 		if r == 0:
 			return np.zeros(self._feature_length(window.shape[1]), dtype=np.float64)
 
+		# Retain the leading r singular components.
 		U_r = U[:, :r]
 		S_r = singular_vals[:r]
 		V_r = Vh.conj().T[:, :r]
 
+		# STEP 3 -------------------------------------------------------------
+		# Assemble the reduced-order linear operator \tilde{A} that advances the
+		# system dynamics in the subspace spanned by U_r.
 		S_inv = np.diag(1.0 / S_r)
 		A_tilde = U_r.T @ Y @ V_r @ S_inv
 		eigvals, eigvecs = np.linalg.eig(A_tilde)
 
-		# Sort modes by magnitude (energy dominance)
+		# STEP 4 -------------------------------------------------------------
+		# Sort the eigenpairs by magnitude |λ| to prioritise dynamically dominant
+		# modes. Pull the DMD modes back into the original feature space.
 		order = np.argsort(-np.abs(eigvals))
 		eigvals = eigvals[order]
 		eigvecs = eigvecs[:, order]
 
 		modes = Y @ V_r @ S_inv @ eigvecs
 
-		# Rank-r reconstruction of X and residual energy
+		# STEP 5 -------------------------------------------------------------
+		# Quantify the fidelity of the rank-r approximation by reconstructing X
+		# and comparing the residual energy with the original signal.
 		X_rank_r = U_r @ np.diag(S_r) @ V_r.T
 		recon_error = np.linalg.norm(X - X_rank_r) / (np.linalg.norm(X) + 1e-8)
 
@@ -145,7 +274,9 @@ class TensorDMDFeatureExtractor:
 		features.extend(self._pad(np.real(amplitudes), self.top_modes))
 		features.extend(self._pad(np.imag(amplitudes), self.top_modes))
 
-		# Temporal summary statistics (per-feature) to capture slower dynamics
+		# STEP 6 -------------------------------------------------------------
+		# Temporal summary statistics complement the modal decomposition and
+		# capture slower drifts not fully described by oscillatory modes.
 		feature_means = window.mean(axis=0)
 		feature_stds = window.std(axis=0)
 		feature_trends = window[-1] - window[0]
@@ -225,6 +356,7 @@ def build_feature_matrix(df: pd.DataFrame) -> Tuple[NDArray[np.float64], NDArray
 
 	transformers = []
 	if feature_cols:
+		# Standardise continuous sensors so each contributes comparably (zero mean / unit variance).
 		transformers.append(("num", StandardScaler(), feature_cols))
 	if cat_cols:
 		transformers.append((
@@ -267,6 +399,8 @@ def window_tensor(
 		end = start + window_size
 		window = feature_matrix[start:end, :]
 		label = int(labels[end - 1])
+		# Each sliding window encodes a short-term dynamical regime. DMD transforms
+		# this tensor slice into modal features that the classifier can ingest.
 		features = extractor.transform(window)
 		samples.append(features)
 		sample_labels.append(label)
@@ -335,6 +469,7 @@ def train_and_evaluate(
 	y: NDArray[np.int64],
 	cfg: DMDTensorConfig,
 ) -> Tuple[Pipeline, dict]:
+	"""Train the chosen classifier and report an extensive metrics dictionary."""
 	X_train, X_test, y_train, y_test = train_test_split(
 		X,
 		y,
@@ -388,6 +523,65 @@ def train_and_evaluate(
 	return pipeline, metrics
 
 
+def pretty_print_metrics(metrics: dict) -> None:
+	"""Render evaluation results in a concise, human-friendly layout."""
+
+	def fmt(value: object) -> str:
+		if isinstance(value, (float, np.floating)):
+			return f"{value:.4f}"
+		if isinstance(value, (int, np.integer)):
+			return f"{int(value)}"
+		return str(value)
+
+	print("=== Tensor DMD Textile Failure Classification ===")
+
+	ordered_stats = [
+		("Accuracy", "accuracy"),
+		("Precision", "precision"),
+		("Recall", "recall"),
+		("F1 score", "f1"),
+		("ROC AUC", "roc_auc"),
+		("CV ROC AUC (mean)", "cv_roc_auc_mean"),
+		("CV ROC AUC (std)", "cv_roc_auc_std"),
+	]
+
+	print("\nPerformance summary:")
+	for label, key in ordered_stats:
+		if key in metrics:
+			print(f"  {label:<20}: {fmt(metrics[key])}")
+
+	if "confusion_matrix" in metrics:
+		cm = metrics["confusion_matrix"]
+		print("\nConfusion matrix (rows=true, cols=pred):")
+		print("              pred=0   pred=1")
+		print(f"  true=0     {cm[0][0]:7d}   {cm[0][1]:7d}")
+		print(f"  true=1     {cm[1][0]:7d}   {cm[1][1]:7d}")
+
+	if "best_params" in metrics:
+		print("\nBest hyperparameters:")
+		for param, value in metrics["best_params"].items():
+			print(f"  {param}: {value}")
+
+	if "pca" in metrics:
+		pca_info = metrics["pca"]
+		print("\nPCA summary:")
+		if "n_components" in pca_info:
+			print(f"  Components kept       : {pca_info['n_components']}")
+		if "cumulative_explained_variance" in pca_info:
+			print(
+				f"  Cumulative variance   : {fmt(pca_info['cumulative_explained_variance'])}"
+			)
+		ratios = pca_info.get("explained_variance_ratio", [])
+		if ratios:
+			sample = ", ".join(f"{r:.4f}" for r in ratios[:5])
+			suffix = " ..." if len(ratios) > 5 else ""
+			print(f"  Leading variance ratios: {sample}{suffix}")
+
+	if "classification_report" in metrics:
+		print("\nClassification report:")
+		print(metrics["classification_report"].rstrip())
+
+
 # ---------------------------------------------------------------------------
 # Command-line interface
 # ---------------------------------------------------------------------------
@@ -437,6 +631,25 @@ def parse_args() -> DMDTensorConfig:
 		help="Enable cross-validated hyperparameter tuning for the chosen classifier.",
 	)
 	parser.add_argument(
+		"--no-pca",
+		dest="use_pca",
+		action="store_false",
+		help="Disable the PCA dimensionality reduction stage.",
+	)
+	parser.set_defaults(use_pca=True)
+	parser.add_argument(
+		"--pca-components",
+		type=int,
+		default=None,
+		help="Explicit number of principal components to retain (overrides variance).",
+	)
+	parser.add_argument(
+		"--pca-variance",
+		type=float,
+		default=0.95,
+		help="Cumulative explained variance ratio threshold for PCA (ignored if components specified).",
+	)
+	parser.add_argument(
 		"--export-features",
 		type=Path,
 		default=None,
@@ -459,6 +672,9 @@ def parse_args() -> DMDTensorConfig:
 		test_size=args.test_size,
 		classifier=args.classifier,
 		grid_search=args.grid_search,
+		use_pca=args.use_pca,
+		pca_components=args.pca_components,
+		pca_variance_ratio=args.pca_variance,
 		export_features_path=args.export_features,
 		export_model_path=args.export_model,
 	)
@@ -471,6 +687,16 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 	df = load_dataset(cfg.data_path)
 	feature_matrix, labels, base_feature_names = build_feature_matrix(df)
 
+	pca_projection: Optional[PCAProjection] = None
+	if cfg.use_pca:
+		pca = PCAFromScratch(
+			n_components=cfg.pca_components,
+			variance_ratio=cfg.pca_variance_ratio,
+		)
+		feature_matrix = pca.fit_transform(feature_matrix)
+		pca_projection = pca.projection_
+		base_feature_names = [f"pca_component_{i}" for i in range(feature_matrix.shape[1])]
+
 	extractor = TensorDMDFeatureExtractor(rank=cfg.dmd_rank, top_modes=cfg.top_modes)
 	X, y, dmd_feature_names = window_tensor(
 		feature_matrix,
@@ -480,9 +706,14 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 	)
 
 	model, metrics = train_and_evaluate(X, y, cfg)
+	if pca_projection is not None:
+		metrics["pca"] = {
+			"n_components": int(pca_projection.components.shape[1]),
+			"explained_variance_ratio": pca_projection.explained_variance_ratio.tolist(),
+			"cumulative_explained_variance": float(pca_projection.explained_variance_ratio.cumsum()[-1]),
+		}
 
-	print("=== Tensor DMD Textile Failure Classification ===")
-	print(json.dumps(metrics, indent=2))
+	pretty_print_metrics(metrics)
 
 	if cfg.export_features_path:
 		features_df = pd.DataFrame(X, columns=dmd_feature_names)
