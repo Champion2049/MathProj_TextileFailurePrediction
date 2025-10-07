@@ -7,7 +7,7 @@ non-failure regimes.
 
 Usage (from the project root)::
 
-	python DMD_Tensor.py --data-path textile_machine_data.csv
+	python DMD_Tensor.py --data-path C:\Users\mechi\Documents\GitHub\MathProj_TextileFailurePrediction\textile_machine_data.csv --classifier gradient_boosting --grid-search --output-dir artifacts   
 
 Optional arguments expose the window length, DMD rank, target classifier,
 and export paths for engineered features and the fitted model.
