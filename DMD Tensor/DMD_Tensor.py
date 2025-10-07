@@ -23,6 +23,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+import joblib
+import matplotlib.pyplot as plt
 from numpy.typing import ArrayLike, NDArray
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
@@ -32,6 +34,7 @@ from sklearn.metrics import (
 	confusion_matrix,
 	precision_recall_fscore_support,
 	roc_auc_score,
+ 	ConfusionMatrixDisplay,
 )
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
@@ -58,6 +61,7 @@ class DMDTensorConfig:
 	use_pca: bool = True
 	pca_components: Optional[int] = None
 	pca_variance_ratio: float = 0.95
+	output_dir: Optional[Path] = None
 	export_features_path: Optional[Path] = None
 	export_model_path: Optional[Path] = None
 
@@ -648,6 +652,12 @@ def parse_args() -> DMDTensorConfig:
 		help="Cumulative explained variance ratio threshold for PCA (ignored if components specified).",
 	)
 	parser.add_argument(
+		"--output-dir",
+		type=Path,
+		default=None,
+		help="Directory where evaluation artefacts (confusion matrix, model) will be stored.",
+	)
+	parser.add_argument(
 		"--export-features",
 		type=Path,
 		default=None,
@@ -673,6 +683,7 @@ def parse_args() -> DMDTensorConfig:
 		use_pca=args.use_pca,
 		pca_components=args.pca_components,
 		pca_variance_ratio=args.pca_variance,
+		output_dir=args.output_dir,
 		export_features_path=args.export_features,
 		export_model_path=args.export_model,
 	)
@@ -711,6 +722,28 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 			"cumulative_explained_variance": float(pca_projection.explained_variance_ratio.cumsum()[-1]),
 		}
 
+	# Persist evaluation artefacts (plots, trained estimator) when requested.
+	artifact_dir = cfg.output_dir
+	if artifact_dir:
+		artifact_dir.mkdir(parents=True, exist_ok=True)
+		cm_raw = metrics.get("confusion_matrix")
+		if cm_raw is not None:
+			cm = np.asarray(cm_raw)
+			if cm.ndim == 2:
+				cm_path = artifact_dir / "confusion_matrix.png"
+				fig, ax = plt.subplots(figsize=(4.5, 4.0))
+				disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No failure", "Failure"])
+				disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
+				ax.set_title("Confusion Matrix")
+				plt.tight_layout()
+				fig.savefig(cm_path, dpi=300)
+				plt.close(fig)
+				print(f"Saved confusion matrix to {cm_path}")
+
+		model_path = artifact_dir / "trained_model.joblib"
+		joblib.dump({"model": model, "config": asdict(cfg)}, model_path)
+		print(f"Saved trained model to {model_path}")
+
 	pretty_print_metrics(metrics)
 
 	if cfg.export_features_path:
@@ -720,13 +753,6 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 		print(f"Saved engineered features to {cfg.export_features_path}")
 
 	if cfg.export_model_path:
-		try:
-			import joblib
-		except ModuleNotFoundError as exc:  # pragma: no cover
-			raise ModuleNotFoundError(
-				"joblib is required to export the trained model. Install it via 'pip install joblib'."
-			) from exc
-
 		model_dir = cfg.export_model_path.parent
 		model_dir.mkdir(parents=True, exist_ok=True)
 		joblib.dump({"model": model, "config": asdict(cfg), "feature_names": dmd_feature_names}, cfg.export_model_path)
