@@ -1,5 +1,7 @@
 
-````markdown
+
+---
+
 # Textile Machine Failure Prediction
 
 Predicts textile machine failures using an SVM model with preprocessing, PCA, and regularization.
@@ -7,83 +9,81 @@ Predicts textile machine failures using an SVM model with preprocessing, PCA, an
 ---
 
 ## Dataset
-- CSV: `textile_machine_data.csv`
-- Target: `Failure` (0 = no failure, 1 = failure)
-- Features used for final model: `Vibration, RPM, Power_Consumption, Yarn_Tension`
+
+* CSV: `textile_machine_data.csv`
+* Target: `Failure` (0 = no failure, 1 = failure)
+* Features used for final model: Vibration, RPM, Power_Consumption, Yarn_Tension
 
 ---
 
 ## Requirements
-- Python 3.x
-- Libraries:
-  ```bash
-  numpy
-  # Textile Machine Failure Prediction (SVM)
 
-  This folder contains an SVM pipeline for predicting textile machine failures from sensor data.
+* Python 3.x
+* Libraries: numpy, pandas, scikit-learn, matplotlib, joblib
 
-  Overview
-  --------
-  - Dataset: `textile_machine_data.csv` (repo root)
-  - Target column: `Failure` (0 = no failure, 1 = failure)
-  - Final features used by the cleaned model: `Vibration, RPM, Power_Consumption, Yarn_Tension`
+---
 
-  Requirements
-  ------------
-  - Python 3.x
-  - Install required packages (see `requirements.txt` in repo root):
+## Preprocessing & Modeling
 
-  ```powershell
-  pip install -r requirements.txt
-  ```
+* Dropped perfectly predictive & highly correlated features
+* Added small Gaussian noise to numeric features
+* Pipeline: StandardScaler -> PCA(n_components=0.95) -> SVC(class_weight='balanced')
+* GridSearchCV for SVC `C` with balanced_accuracy scoring
+* Group-aware train/test split by Machine_ID to avoid leakage
 
-  Quick start
-  -----------
-  From the repository root run:
+---
 
-  ```powershell
-  python SVM/svm.py
-  ```
+## Performance
 
-  This script will:
-  - Load `textile_machine_data.csv` from the repo root.
-  - Run preprocessing (drop leaking/highly-correlated features, small Gaussian noise), PCA, and an SVC pipeline.
-  - Perform cross-validation and a small grid search for regularization (C).
-  - Save artifacts: `feature_importance.png` (in `SVM/`) and `best_svc.joblib` (in repo root).
+* Test accuracy: 99.27%
+* Confusion matrix:
+  [[1054, 2],
+  [9, 435]]
+* 5-fold CV mean accuracy: 0.9908
+* Dummy/shuffled baseline: ~0.704
 
-  Notes about paths and running
-  ----------------------------
-  - The script expects the CSV at `../textile_machine_data.csv` when run from `SVM/`, or `textile_machine_data.csv` when run from repo root. Running `python SVM/svm.py` from repo root is the recommended approach.
-  - The trained model is saved to `best_svc.joblib` in the repo root.
+---
 
-  Demo: load the saved model and run predictions
-  --------------------------------------------
-  Example (run from repo root):
+## Feature Importance
 
-  ```python
-  import joblib
-  import pandas as pd
+Permutation importance (balanced_accuracy) on test set:
 
-  # Load model (saved to repo root by the script)
-  model = joblib.load('best_svc.joblib')
+* Vibration: 0.118
+* Power_Consumption: 0.105
+* RPM: 0.072
+* Yarn_Tension: 0.055
 
-  # Prepare new data (use the same 4 features the model expects)
-  df = pd.read_csv('textile_machine_data.csv')
-  X_new = df[['Vibration', 'RPM', 'Power_Consumption', 'Yarn_Tension']].iloc[:5]
+Plot saved as `feature_importance.png`.
 
-  # Predict
-  predictions = model.predict(X_new)
-  print(predictions)
-  ```
+---
 
-  What changed and why
-  ----------------------
-  - Fixed malformed Markdown fences and inconsistent code blocks.
-  - Clarified the correct run command and file paths.
-  - Pointed to `requirements.txt` for installation instead of listing packages inline.
-  - Added explicit note about where artifacts are saved (`feature_importance.png` in `SVM/`, `best_svc.joblib` in repo root).
+## Demo Prediction
 
-  If you want, I can also:
-  - Add a short `predict.py` script that accepts a CSV and outputs predictions.
-  - Save the permutation importance table as a CSV.
-  - Create a small README at the repo root describing all scripts.
+```python
+import joblib
+import pandas as pd
+
+# Load the trained model
+model = joblib.load('best_svc.joblib')
+
+# Prepare new data (keep only the 4 features)
+X_new = pd.read_csv('textile_machine_data.csv')[['Vibration', 'RPM', 'Power_Consumption', 'Yarn_Tension']].iloc[:5]
+
+# Predict
+predictions = model.predict(X_new)
+print(predictions)
+```
+
+---
+
+## Notes
+
+* High accuracy reflects strong predictive signals in the dataset.
+* Parameters CORR_THRESHOLD and NOISE_STD are configurable in `svm.py`.
+* PCA reduces dimensionality while preserving 95% variance.
+* Use the model responsibly; extreme regularization or noise can collapse predictions.
+* All scripts are designed to be reproducible with the same CSV input.
+
+---
+
+
