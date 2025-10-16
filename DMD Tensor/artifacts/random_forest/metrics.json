@@ -1,0 +1,95 @@
+{
+  "accuracy": 0.9519038076152304,
+  "precision": 0.9881889763779528,
+  "recall": 0.847972972972973,
+  "f1": 0.9127272727272727,
+  "roc_auc": 0.9946629321629322,
+  "confusion_matrix": [
+    [
+      699,
+      3
+    ],
+    [
+      45,
+      251
+    ]
+  ],
+  "classification_report": "              precision    recall  f1-score   support\n\n           0       0.94      1.00      0.97       702\n           1       0.99      0.85      0.91       296\n\n    accuracy                           0.95       998\n   macro avg       0.96      0.92      0.94       998\nweighted avg       0.95      0.95      0.95       998\n",
+  "best_params": {
+    "clf__max_depth": null,
+    "clf__min_samples_leaf": 1,
+    "clf__min_samples_split": 2
+  },
+  "cv_roc_auc_mean": 0.9931776551134266,
+  "cv_roc_auc_std": 0.000316301807754539,
+  "pca": {
+    "n_components": 11,
+    "explained_variance_ratio": [
+      0.5872165305636223,
+      0.08103625981642004,
+      0.06498151989194664,
+      0.043704014561061245,
+      0.03549056101944725,
+      0.031154693724374516,
+      0.027728128750064043,
+      0.024184963977560165,
+      0.023382202890730827,
+      0.020710286159338637,
+      0.020368845215276668
+    ],
+    "cumulative_explained_variance": 0.9599580065698424
+  },
+  "classifier": "random_forest",
+  "top_features": [
+    {
+      "feature": "trend_0",
+      "score": 0.3212534022993103,
+      "weight": 0.3212534022993103
+    },
+    {
+      "feature": "last_step_delta_norm",
+      "score": 0.16653816206371794,
+      "weight": 0.16653816206371794
+    },
+    {
+      "feature": "eig_abs_0",
+      "score": 0.03906683719132679,
+      "weight": 0.03906683719132679
+    },
+    {
+      "feature": "eig_abs_1",
+      "score": 0.03779364149586508,
+      "weight": 0.03779364149586508
+    },
+    {
+      "feature": "trend_1",
+      "score": 0.026446977329966675,
+      "weight": 0.026446977329966675
+    },
+    {
+      "feature": "trend_2",
+      "score": 0.022996321817469818,
+      "weight": 0.022996321817469818
+    },
+    {
+      "feature": "mean_0",
+      "score": 0.021477827834744622,
+      "weight": 0.021477827834744622
+    },
+    {
+      "feature": "window_std",
+      "score": 0.01391316208131084,
+      "weight": 0.01391316208131084
+    },
+    {
+      "feature": "eig_abs_2",
+      "score": 0.013344348725357346,
+      "weight": 0.013344348725357346
+    },
+    {
+      "feature": "trend_4",
+      "score": 0.011643142913440605,
+      "weight": 0.011643142913440605
+    }
+  ]
+}
