@@ -39,7 +39,6 @@ print('Loading dataset...')
 df = pd.read_csv('textile_machine_data.csv')
 
 # ---------- Cleaning & Irregularity handling ----------
-# --- CHANGE HERE: Dropping the top FIVE most correlated features ---
 features_to_drop = [
     'Machine_ID', 'Timestamp', 'Operating_Hours', 
     'Noise_Level', 'Bearing_Temperature', 'Temperature', 'Motor_Current'
@@ -66,23 +65,24 @@ scaler = StandardScaler().fit(X_train_raw)
 X_train = scaler.transform(X_train_raw)
 X_test = scaler.transform(X_test_raw)
 
-# ---------- Manual PCA (fit on train) ----------
-k = min(5, X_train.shape[1])
-Z_train, eigvals, evr, X_mean, V_k = manual_pca(X_train, k=k)
-X_test_centered = X_test - X_mean
-Z_test = X_test_centered @ V_k
-print('\nManual PCA explained variance ratio (train):', evr)
+# ---------- Manual PCA for Evaluation (k=5) ----------
+k_eval = min(5, X_train.shape[1])
+Z_train_eval, _, evr_eval, X_mean_eval, V_k_eval = manual_pca(X_train, k=k_eval)
+X_test_centered_eval = X_test - X_mean_eval
+Z_test_eval = X_test_centered_eval @ V_k_eval
+print('\nManual PCA (for evaluation) explained variance ratio (train):', evr_eval)
+
 
 # ---------- RKHS Kernel on PCA projection ----------
-sigma = np.std(Z_train) if np.std(Z_train) > 0 else 1.0
-K_train = rbf_kernel(Z_train, sigma=sigma)
-K_test = np.exp(-np.sum((Z_test[:, None, :] - Z_train[None, :, :])**2, axis=2) / (2 * sigma**2))
+sigma = np.std(Z_train_eval) if np.std(Z_train_eval) > 0 else 1.0
+K_train = rbf_kernel(Z_train_eval, sigma=sigma)
+K_test = np.exp(-np.sum((Z_test_eval[:, None, :] - Z_train_eval[None, :, :])**2, axis=2) / (2 * sigma**2))
 
 # ---------- Train & Evaluate classifiers ----------
 # 1) Logistic on PCA coords
 clf_pca = LogisticRegression(max_iter=2000, random_state=42)
-clf_pca.fit(Z_train, y_train)
-y_pred_pca = clf_pca.predict(Z_test)
+clf_pca.fit(Z_train_eval, y_train)
+y_pred_pca = clf_pca.predict(Z_test_eval)
 
 # 2) Kernel SVM using precomputed kernel
 svc = SVC(kernel='precomputed', probability=True, random_state=42)
@@ -101,7 +101,7 @@ print_metrics(y_test, y_pred_pca, 'Logistic on PCA')
 print_metrics(y_test, y_pred_k, 'Kernel SVM on RKHS')
 
 # ---------- Plots: ROC and Confusion Matrices ----------
-scores_pca = clf_pca.predict_proba(Z_test)[:, 1]
+scores_pca = clf_pca.predict_proba(Z_test_eval)[:, 1]
 scores_k = svc.predict_proba(K_test)[:, 1]
 
 fpr_p, tpr_p, _ = roc_curve(y_test, scores_pca)
@@ -139,5 +139,51 @@ ax.set_ylabel('Actual')
 ax.set_xlabel('Predicted')
 fig.savefig('final_confusion_matrix_rkhs.png')
 print("Saved confusion matrix to final_confusion_matrix_rkhs.png")
+
+# ---------- NEW: Decision Boundary Plot ----------
+print("\nGenerating decision boundary plot...")
+# Step 1: Get 2D PCA for visualization
+k_viz = 2
+Z_train_viz, _, _, _, _ = manual_pca(X_train, k=k_viz)
+
+# Step 2: Train models on the 2D data
+clf_viz = LogisticRegression(random_state=42).fit(Z_train_viz, y_train)
+# We use a standard RBF SVM here for visualization, as it's a direct analogy to the RKHS method
+svc_viz = SVC(kernel='rbf', gamma='auto', random_state=42).fit(Z_train_viz, y_train)
+
+# Step 3: Create a meshgrid to plot the decision surface
+x_min, x_max = Z_train_viz[:, 0].min() - 1, Z_train_viz[:, 0].max() + 1
+y_min, y_max = Z_train_viz[:, 1].min() - 1, Z_train_viz[:, 1].max() + 1
+xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.02),
+                     np.arange(y_min, y_max, 0.02))
+
+# Step 4: Plot the decision boundaries
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# Plot for Logistic Regression
+Z_logistic = clf_viz.predict(np.c_[xx.ravel(), yy.ravel()])
+Z_logistic = Z_logistic.reshape(xx.shape)
+axes[0].contourf(xx, yy, Z_logistic, alpha=0.4, cmap=plt.cm.coolwarm)
+scatter = axes[0].scatter(Z_train_viz[:, 0], Z_train_viz[:, 1], c=y_train, cmap=plt.cm.coolwarm, s=20, edgecolors='k')
+axes[0].set_title('Logistic Regression Decision Boundary')
+axes[0].set_xlabel('Principal Component 1')
+axes[0].set_ylabel('Principal Component 2')
+axes[0].legend(handles=scatter.legend_elements()[0], labels=['No Failure', 'Failure'])
+
+
+# Plot for RBF SVM
+Z_svm = svc_viz.predict(np.c_[xx.ravel(), yy.ravel()])
+Z_svm = Z_svm.reshape(xx.shape)
+axes[1].contourf(xx, yy, Z_svm, alpha=0.4, cmap=plt.cm.coolwarm)
+scatter = axes[1].scatter(Z_train_viz[:, 0], Z_train_viz[:, 1], c=y_train, cmap=plt.cm.coolwarm, s=20, edgecolors='k')
+axes[1].set_title('RBF SVM Decision Boundary (Visual Analogy for RKHS)')
+axes[1].set_xlabel('Principal Component 1')
+axes[1].set_ylabel('Principal Component 2')
+axes[1].legend(handles=scatter.legend_elements()[0], labels=['No Failure', 'Failure'])
+
+plt.tight_layout()
+fig.savefig('decision_boundaries.png')
+print("Saved decision boundary plot to decision_boundaries.png")
+
 
 print('\nDone.')
