@@ -1,8 +1,5 @@
 # Predictive Maintenance for Textile Machines using Tensor Decomposition (HO-SVD)
 
-![Final Confusion Matrix](https://placehold.co/800x600/2c2c2c/ffffff?text=Confusion%20Matrix%20Visualization&font=inter)
-*Example output: The final confusion matrix showing the model's performance.*
-
 ## Overview
 
 This project implements a novel predictive maintenance model for textile machinery using a tensor-based approach. Instead of traditional feature engineering on time-series data, this model leverages **Higher-Order Singular Value Decomposition (HO-SVD)** to classify machine states as either "Failure" or "Non-Failure".
