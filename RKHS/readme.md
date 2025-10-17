@@ -9,18 +9,13 @@ Its defining feature is the **reproducing property**, which connects function ev
 
 ## 🌱 1. What is an RKHS?
 
-An RKHS is a Hilbert space \( \mathcal{H} \) of functions \( f : X \to \mathbb{R} \) such that for every \( x \in X \), the **evaluation functional**
+An RKHS is a Hilbert space 𝓗 of functions f(x) such that for every x, the *evaluation functional*  
+Lₓ(f) = f(x)  
+is **bounded (continuous)**.
 
-\[
-L_x(f) = f(x)
-\]
+By the Riesz Representation Theorem, this implies that for every x, there exists a unique function kₓ ∈ 𝓗 satisfying:
 
-is **bounded (continuous)**.  
-By the **Riesz Representation Theorem**, this implies that for every \( x \), there exists a unique function \( k_x \in \mathcal{H} \) satisfying:
-
-\[
-f(x) = \langle f, k_x \rangle_{\mathcal{H}}, \quad \forall f \in \mathcal{H}.
-\]
+> f(x) = ⟨f, kₓ⟩ₕ  for all f ∈ 𝓗
 
 This is the **reproducing property**.
 
@@ -30,71 +25,60 @@ This is the **reproducing property**.
 
 The **reproducing kernel** is a function:
 
-\[
-k(x, y) = \langle k_y, k_x \rangle_{\mathcal{H}}.
-\]
+> k(x, y) = ⟨kᵧ, kₓ⟩ₕ
 
 It must satisfy:
 
-1. **Symmetry:** \( k(x, y) = k(y, x) \)
-2. **Positive Semi-definiteness (PSD):**
-   \[
-   \sum_{i,j=1}^n c_i c_j k(x_i, x_j) \ge 0, \quad \forall c_i \in \mathbb{R}.
-   \]
+1. **Symmetry:** k(x, y) = k(y, x)  
+2. **Positive Semi-definiteness (PSD):** ΣᵢΣⱼ cᵢcⱼ k(xᵢ, xⱼ) ≥ 0  for all real cᵢ.
 
 ---
 
 ## 🧭 3. Constructing the RKHS from a Kernel
 
-Given a PSD kernel \( k(x, y) \), the corresponding RKHS is constructed as follows:
+Given a PSD kernel k(x, y):
 
-1. Start with finite linear combinations:
-   \[
-   f(x) = \sum_{i=1}^n \alpha_i k(x_i, x)
-   \]
+1. Start with finite linear combinations:  
+   f(x) = Σᵢ αᵢ k(xᵢ, x)
 
-2. Define the inner product:
-   \[
-   \left\langle \sum_i \alpha_i k(x_i, \cdot), \sum_j \beta_j k(x_j, \cdot) \right\rangle_{\mathcal{H}} = \sum_{i,j} \alpha_i \beta_j k(x_i, x_j)
-   \]
+2. Define the inner product:  
+   ⟨f, g⟩ₕ = ΣᵢΣⱼ αᵢβⱼ k(xᵢ, xⱼ)
 
-3. Complete this space under the norm induced by the inner product.
+3. Complete the space under this inner product norm.
 
-Thus, each \( f \in \mathcal{H} \) is (possibly infinite) a linear combination of kernels.
+Each f in 𝓗 is thus a linear (possibly infinite) combination of kernels.
 
 ---
 
 ## ⚙️ 4. RKHS in Machine Learning
 
-Kernel-based algorithms (e.g., **SVMs**, **Gaussian Processes**, **Kernel Ridge Regression**) implicitly operate in an RKHS.  
-They avoid explicitly mapping data into high-dimensional space by using the **kernel trick**:
+Kernel-based algorithms (e.g., **SVMs**, **Gaussian Processes**, **Kernel Ridge Regression**) operate implicitly in an RKHS.  
+They avoid explicit mapping into high-dimensional space by using the **kernel trick**:
 
-\[
-\langle \phi(x), \phi(y) \rangle_{\mathcal{H}} = k(x, y)
-\]
+> ⟨φ(x), φ(y)⟩ₕ = k(x, y)
 
-This means we compute inner products in \( \mathcal{H} \) without knowing the explicit mapping \( \phi \).
+This allows computing inner products in 𝓗 without knowing the explicit mapping φ.
 
 ---
 
 ## 🌌 5. Common Examples of Kernels and Their RKHS
 
-| **Kernel Function** | **Formulation** | **RKHS Description** |
-|----------------------|-----------------|----------------------|
-| **Linear** | \( k(x, y) = x^\top y \) | Space of linear functions \( f(x) = w^\top x \) |
-| **Polynomial** | \( k(x, y) = (x^\top y + c)^d \) | Polynomials up to degree \( d \) |
-| **RBF (Gaussian)** | \( k(x, y) = \exp(-\|x - y\|^2 / 2\sigma^2) \) | Infinitely smooth functions |
-| **Laplacian** | \( k(x, y) = \exp(-\|x - y\| / \sigma) \) | Functions with bounded variation |
-| **Sigmoid** | \( k(x, y) = \tanh(a x^\top y + b) \) | Not always PSD (depends on parameters) |
+| **Kernel Function** | **Formula** | **RKHS Description** |
+|----------------------|-------------|----------------------|
+| **Linear** | k(x, y) = xᵀy | Space of linear functions f(x) = wᵀx |
+| **Polynomial** | k(x, y) = (xᵀy + c)ᵈ | Polynomials up to degree d |
+| **RBF (Gaussian)** | k(x, y) = exp(−‖x − y‖² / (2σ²)) | Infinitely smooth functions |
+| **Laplacian** | k(x, y) = exp(−‖x − y‖ / σ) | Functions with bounded variation |
+| **Sigmoid** | k(x, y) = tanh(a xᵀy + b) | Not always PSD (depends on a, b) |
 
 ---
 
 ## 🧩 6. Relationship Between RKHS, RK, and RBF
 
-- **RKHS:** The entire function space equipped with an inner product defined by a kernel.  
-- **RK:** The kernel function \( k(x, y) \) itself, defining how similarity is measured.  
-- **RBF Kernel:** One specific type of reproducing kernel (Gaussian).  
-- The RKHS of the RBF kernel is infinite-dimensional and contains very smooth functions.
+- **RKHS:** The complete function space defined by the kernel’s inner product.  
+- **RK:** The kernel function k(x, y) that defines similarity.  
+- **RBF Kernel:** A specific reproducing kernel based on Gaussian distance.  
+- The RBF kernel’s RKHS is infinite-dimensional and contains smooth, continuous functions.
 
 ---
 
