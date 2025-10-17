@@ -46,33 +46,48 @@ python DMD_Tensor.py --data-path textile_machine_data.csv
 - `--test-size` *(float, default: 0.2)* – evaluation split ratio.
 - `--classifier {logreg|gradient_boosting|random_forest}` – choose the downstream
    estimator.
+- `--compare-classifiers` – evaluate all supported classifiers (logreg,
+  gradient boosting, random forest) with identical features and print a
+  side-by-side comparison table.
 - `--no-pca` – disable the handcrafted PCA stage.
 - `--pca-components` / `--pca-variance` – control the dimensionality preserved by
    the PCA projection (defaults to 95% cumulative variance).
-- `--output-dir path/to/folder` – save the confusion matrix image and trained
-   model (`trained_model.joblib`) in the specified directory.
+- `--output-dir path/to/folder` – store evaluation artefacts in the specified
+  directory (confusion matrix, ROC curve, decision landscape, ranked feature
+  influence table, metrics.json, trained model, etc.).
 - `--grid-search` – enable cross-validated hyperparameter tuning for the chosen
    classifier.
 - `--export-features path/to/file.csv` – persist the engineered DMD feature
    table for further analysis.
 - `--export-model path/to/model.joblib` – serialise the fitted pipeline for
-   deployment (requires `joblib`).
+   deployment (requires `joblib`). When combined with `--compare-classifiers`,
+   the filename is suffixed with the classifier name to avoid overwrites.
 
 ## Outputs
 
 Running the script prints a console diagnostics summary containing:
 
 - Accuracy, precision, recall, F1, ROC-AUC.
-- Confusion matrix (also saved as an image when `--output-dir` is provided) and
-   textual classification report.
+- Confusion matrix (also saved as an image when `--output-dir` is provided),
+   textual classification report, and the top contributing features driving the
+   predictions.
 - 5-fold cross-validated ROC-AUC mean and standard deviation.
 
 When export flags are supplied, the engineered feature matrix and the trained
 model artefacts are written to disk alongside the full configuration for
-reproducibility.
+reproducibility. Providing `--output-dir` additionally saves:
+
+- `confusion_matrix.png` – hold-out confusion matrix visualisation.
+- `roc_curve.png` – ROC plot with the AUC annotated.
+- `decision_boundary.png` – two-dimensional decision landscape (first two
+   feature axes).
+- `feature_influence.csv` – ranked feature importance / coefficient table.
+- `metrics.json` – structured metrics bundle for downstream reporting.
+- `trained_model.joblib` – fitted pipeline and configuration snapshot.
 
 ## Next steps
 
-- Complement with additional classifiers (e.g., gradient boosting or SVM).
 - Incorporate streaming inference by processing windows in real-time.
 - Enrich the feature space with domain-specific health indicators or thresholds.
+- Extend interpretability with SHAP or partial dependence analysis when
+   stronger explainability is required.

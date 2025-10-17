@@ -7,7 +7,7 @@ non-failure regimes.
 
 Usage (from the project root)::
 
-	python DMD_Tensor.py --data-path textile_machine_data.csv
+	python DMD_Tensor.py --data-path C:/Users/mechi/Documents/GitHub/MathProj_TextileFailurePrediction/textile_machine_data.csv --classifier gradient_boosting --grid-search --output-dir artifacts   
 
 Optional arguments expose the window length, DMD rank, target classifier,
 and export paths for engineered features and the fitted model.
@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -34,7 +34,8 @@ from sklearn.metrics import (
 	confusion_matrix,
 	precision_recall_fscore_support,
 	roc_auc_score,
- 	ConfusionMatrixDisplay,
+	roc_curve,
+	ConfusionMatrixDisplay,
 )
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
@@ -58,6 +59,7 @@ class DMDTensorConfig:
 	random_state: int = 42
 	classifier: str = "logreg"
 	grid_search: bool = False
+	compare_classifiers: bool = False
 	use_pca: bool = True
 	pca_components: Optional[int] = None
 	pca_variance_ratio: float = 0.95
@@ -74,6 +76,17 @@ class PCAProjection:
 	components: NDArray[np.float64]
 	explained_variance: NDArray[np.float64]
 	explained_variance_ratio: NDArray[np.float64]
+
+
+@dataclass
+class EvaluationArtifacts:
+	"""Cache the evaluation-time arrays needed for interpretability artefacts."""
+
+	y_test: NDArray[np.int64]
+	y_pred: NDArray[np.int64]
+	y_proba: NDArray[np.float64]
+	X_test: NDArray[np.float64]
+	feature_names: Sequence[str]
 
 
 class PCAFromScratch:
@@ -466,11 +479,156 @@ def make_classifier(name: str, random_state: int) -> Tuple[Pipeline, dict]:
 	return pipeline, param_grid
 
 
+def compute_feature_influence(
+	pipeline: Pipeline,
+	feature_names: Sequence[str],
+) -> List[Dict[str, float]]:
+	"""Estimate feature influence using model-dependent attributes."""
+
+	if not feature_names:
+		return []
+
+	clf = pipeline.named_steps.get("clf")
+	if clf is None:
+		return []
+
+	importance: Optional[np.ndarray] = None
+	signed_weights: Optional[np.ndarray] = None
+
+	if hasattr(clf, "coef_"):
+		coef = np.asarray(clf.coef_)
+		if coef.ndim == 2:
+			coef = coef[0]
+		signed_weights = coef.astype(float, copy=True)
+		scaler = pipeline.named_steps.get("scaler")
+		if scaler is not None and hasattr(scaler, "scale_"):
+			scale = np.asarray(scaler.scale_)
+			if scale.shape[0] == signed_weights.shape[0]:
+				# Rescale coefficients back to the original feature scale for readability.
+				signed_weights = signed_weights / np.where(scale == 0, 1.0, scale)
+		importance = np.abs(signed_weights)
+	elif hasattr(clf, "feature_importances_"):
+		importance = np.asarray(getattr(clf, "feature_importances_"), dtype=float)
+
+	if importance is None:
+		return []
+
+	importance = importance.astype(float)
+	if signed_weights is None:
+		signed_weights = importance.copy()
+
+	order = np.argsort(importance)[::-1]
+	results: List[Dict[str, float]] = []
+	for idx in order:
+		if idx >= len(feature_names):
+			continue
+		results.append({
+			"feature": str(feature_names[idx]),
+			"score": float(importance[idx]),
+			"weight": float(signed_weights[idx]),
+		})
+	return results
+
+
+def save_metrics_json(metrics: dict, destination: Path) -> None:
+	"""Persist metrics to JSON with numpy-friendly serialisation."""
+
+	def _default(obj: object) -> object:
+		if isinstance(obj, (np.generic,)):
+			return obj.item()
+		raise TypeError(f"Object of type {type(obj).__name__} is not JSON serialisable")
+
+	with destination.open("w", encoding="utf-8") as fh:
+		json.dump(metrics, fh, indent=2, default=_default)
+
+
+def save_roc_curve_plot(
+	artifacts: EvaluationArtifacts,
+	destination: Path,
+	classifier_label: str,
+) -> None:
+	"""Render and store ROC curve using held-out predictions."""
+
+	fpr, tpr, _ = roc_curve(artifacts.y_test, artifacts.y_proba)
+	fig, ax = plt.subplots(figsize=(5.0, 4.0))
+	ax.plot(fpr, tpr, label=f"{classifier_label} (AUC={roc_auc_score(artifacts.y_test, artifacts.y_proba):.3f})")
+	ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Chance")
+	ax.set_xlabel("False Positive Rate")
+	ax.set_ylabel("True Positive Rate")
+	ax.set_title("ROC Curve")
+	ax.legend(loc="lower right")
+	ax.grid(alpha=0.3)
+	plt.tight_layout()
+	fig.savefig(destination, dpi=300)
+	plt.close(fig)
+
+
+def save_decision_boundary_plot(
+	artifacts: EvaluationArtifacts,
+	pipeline: Pipeline,
+	destination: Path,
+	classifier_label: str,
+) -> None:
+	"""Generate a 2D decision boundary on the leading feature axes when feasible."""
+
+	if artifacts.X_test.shape[1] < 2:
+		print("Decision boundary plot skipped: need at least two features.")
+		return
+
+	x_coords = artifacts.X_test[:, 0]
+	y_coords = artifacts.X_test[:, 1]
+	x_margin = (x_coords.max() - x_coords.min()) * 0.05 or 1.0
+	y_margin = (y_coords.max() - y_coords.min()) * 0.05 or 1.0
+	x_min, x_max = x_coords.min() - x_margin, x_coords.max() + x_margin
+	y_min, y_max = y_coords.min() - y_margin, y_coords.max() + y_margin
+
+	grid_x, grid_y = np.meshgrid(
+		np.linspace(x_min, x_max, 200),
+		np.linspace(y_min, y_max, 200),
+	)
+	baseline = artifacts.X_test.mean(axis=0)
+	grid_points = np.tile(baseline, (grid_x.size, 1))
+	grid_points[:, 0] = grid_x.ravel()
+	grid_points[:, 1] = grid_y.ravel()
+	probabilities = pipeline.predict_proba(grid_points)[:, 1]
+	probabilities = probabilities.reshape(grid_x.shape)
+
+	fig, ax = plt.subplots(figsize=(5.5, 4.5))
+	contour = ax.contourf(grid_x, grid_y, probabilities, levels=20, cmap="coolwarm", alpha=0.7)
+	plt.colorbar(contour, ax=ax, label="Failure probability")
+	_ = ax.scatter(
+		x_coords,
+		y_coords,
+		c=artifacts.y_test,
+		cmap="coolwarm",
+		edgecolor="k",
+		s=35,
+		label="Test samples",
+	)
+	ax.set_xlabel(str(artifacts.feature_names[0]))
+	ax.set_ylabel(str(artifacts.feature_names[1]))
+	ax.set_title(f"Decision Landscape: {classifier_label}")
+	ax.legend(loc="upper right")
+	plt.tight_layout()
+	fig.savefig(destination, dpi=300)
+	plt.close(fig)
+
+
+def save_feature_influence_table(top_features: List[Dict[str, float]], destination: Path) -> None:
+	"""Persist ranked feature influences to CSV for auditability."""
+
+	if not top_features:
+		return
+	frame = pd.DataFrame(top_features)
+	frame.to_csv(destination, index=False)
+
+
 def train_and_evaluate(
 	X: NDArray[np.float64],
 	y: NDArray[np.int64],
 	cfg: DMDTensorConfig,
-) -> Tuple[Pipeline, dict]:
+	feature_names: Sequence[str],
+) -> Tuple[Pipeline, dict, EvaluationArtifacts]:
 	"""Train the chosen classifier and report an extensive metrics dictionary."""
 	X_train, X_test, y_train, y_test = train_test_split(
 		X,
@@ -522,7 +680,15 @@ def train_and_evaluate(
 	metrics["cv_roc_auc_mean"] = float(cv_scores.mean())
 	metrics["cv_roc_auc_std"] = float(cv_scores.std())
 
-	return pipeline, metrics
+	artifacts = EvaluationArtifacts(
+		y_test=y_test,
+		y_pred=y_pred,
+		y_proba=y_proba,
+		X_test=X_test,
+		feature_names=feature_names,
+	)
+
+	return pipeline, metrics, artifacts
 
 
 def pretty_print_metrics(metrics: dict) -> None:
@@ -535,7 +701,8 @@ def pretty_print_metrics(metrics: dict) -> None:
 			return f"{int(value)}"
 		return str(value)
 
-	print("=== Tensor DMD Textile Failure Classification ===")
+	classifier_label = metrics.get("classifier", "Tensor DMD classifier")
+	print(f"=== {classifier_label.title()} Performance Snapshot ===")
 
 	ordered_stats = [
 		("Accuracy", "accuracy"),
@@ -563,6 +730,12 @@ def pretty_print_metrics(metrics: dict) -> None:
 		print("\nBest hyperparameters:")
 		for param, value in metrics["best_params"].items():
 			print(f"  {param}: {value}")
+
+	if metrics.get("top_features"):
+		print("\nTop contributing features:")
+		for entry in metrics["top_features"][:5]:
+			direction = "positive" if entry["weight"] >= 0 else "negative"
+			print(f"  {entry['feature']:<30}: {fmt(entry['score'])} ({direction})")
 
 	if "pca" in metrics:
 		pca_info = metrics["pca"]
@@ -628,6 +801,11 @@ def parse_args() -> DMDTensorConfig:
 		help="Classifier to train on top of DMD features.",
 	)
 	parser.add_argument(
+		"--compare-classifiers",
+		action="store_true",
+		help="Run the experiment for every supported classifier and summarize the results.",
+	)
+	parser.add_argument(
 		"--grid-search",
 		action="store_true",
 		help="Enable cross-validated hyperparameter tuning for the chosen classifier.",
@@ -680,6 +858,7 @@ def parse_args() -> DMDTensorConfig:
 		test_size=args.test_size,
 		classifier=args.classifier,
 		grid_search=args.grid_search,
+		compare_classifiers=args.compare_classifiers,
 		use_pca=args.use_pca,
 		pca_components=args.pca_components,
 		pca_variance_ratio=args.pca_variance,
@@ -714,49 +893,112 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 		extractor=extractor,
 	)
 
-	model, metrics = train_and_evaluate(X, y, cfg)
-	if pca_projection is not None:
-		metrics["pca"] = {
-			"n_components": int(pca_projection.components.shape[1]),
-			"explained_variance_ratio": pca_projection.explained_variance_ratio.tolist(),
-			"cumulative_explained_variance": float(pca_projection.explained_variance_ratio.cumsum()[-1]),
-		}
-
-	# Persist evaluation artefacts (plots, trained estimator) when requested.
-	artifact_dir = cfg.output_dir
-	if artifact_dir:
-		artifact_dir.mkdir(parents=True, exist_ok=True)
-		cm_raw = metrics.get("confusion_matrix")
-		if cm_raw is not None:
-			cm = np.asarray(cm_raw)
-			if cm.ndim == 2:
-				cm_path = artifact_dir / "confusion_matrix.png"
-				fig, ax = plt.subplots(figsize=(4.5, 4.0))
-				disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No failure", "Failure"])
-				disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
-				ax.set_title("Confusion Matrix")
-				plt.tight_layout()
-				fig.savefig(cm_path, dpi=300)
-				plt.close(fig)
-				print(f"Saved confusion matrix to {cm_path}")
-
-		model_path = artifact_dir / "trained_model.joblib"
-		joblib.dump({"model": model, "config": asdict(cfg)}, model_path)
-		print(f"Saved trained model to {model_path}")
-
-	pretty_print_metrics(metrics)
-
 	if cfg.export_features_path:
 		features_df = pd.DataFrame(X, columns=dmd_feature_names)
 		features_df["Failure"] = y
+		cfg.export_features_path.parent.mkdir(parents=True, exist_ok=True)
 		features_df.to_csv(cfg.export_features_path, index=False)
 		print(f"Saved engineered features to {cfg.export_features_path}")
 
-	if cfg.export_model_path:
-		model_dir = cfg.export_model_path.parent
-		model_dir.mkdir(parents=True, exist_ok=True)
-		joblib.dump({"model": model, "config": asdict(cfg), "feature_names": dmd_feature_names}, cfg.export_model_path)
-		print(f"Persisted trained model to {cfg.export_model_path}")
+	artifact_dir = cfg.output_dir
+	if artifact_dir:
+		artifact_dir.mkdir(parents=True, exist_ok=True)
+
+	classifiers_to_run = [cfg.classifier]
+	if cfg.compare_classifiers:
+		classifiers_to_run = ["logreg", "gradient_boosting", "random_forest"]
+
+	comparison_records: List[dict] = []
+
+	for classifier_name in classifiers_to_run:
+		local_cfg = replace(cfg, classifier=classifier_name, compare_classifiers=False)
+		model, metrics, artifacts = train_and_evaluate(X, y, local_cfg, dmd_feature_names)
+		if pca_projection is not None:
+			metrics["pca"] = {
+				"n_components": int(pca_projection.components.shape[1]),
+				"explained_variance_ratio": pca_projection.explained_variance_ratio.tolist(),
+				"cumulative_explained_variance": float(pca_projection.explained_variance_ratio.cumsum()[-1]),
+			}
+		metrics["classifier"] = classifier_name
+		top_features = compute_feature_influence(model, dmd_feature_names)
+		if top_features:
+			metrics["top_features"] = top_features[:10]
+
+		pretty_print_metrics(metrics)
+		comparison_records.append({"classifier": classifier_name, "metrics": metrics})
+
+		if artifact_dir:
+			run_dir = artifact_dir / classifier_name if cfg.compare_classifiers else artifact_dir
+			run_dir.mkdir(parents=True, exist_ok=True)
+
+			cm_raw = metrics.get("confusion_matrix")
+			if cm_raw is not None:
+				cm = np.asarray(cm_raw)
+				if cm.ndim == 2:
+					cm_path = run_dir / "confusion_matrix.png"
+					fig, ax = plt.subplots(figsize=(4.5, 4.0))
+					disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No failure", "Failure"])
+					disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
+					ax.set_title("Confusion Matrix")
+					plt.tight_layout()
+					fig.savefig(cm_path, dpi=300)
+					plt.close(fig)
+					print(f"Saved confusion matrix to {cm_path}")
+
+			roc_path = run_dir / "roc_curve.png"
+			save_roc_curve_plot(artifacts, roc_path, classifier_name)
+			print(f"Saved ROC curve to {roc_path}")
+
+			decision_path = run_dir / "decision_boundary.png"
+			save_decision_boundary_plot(artifacts, model, decision_path, classifier_name)
+			if decision_path.exists():
+				print(f"Saved decision landscape to {decision_path}")
+
+			if metrics.get("top_features"):
+				feature_path = run_dir / "feature_influence.csv"
+				save_feature_influence_table(metrics["top_features"], feature_path)
+				print(f"Saved feature influence table to {feature_path}")
+
+			metrics_path = run_dir / "metrics.json"
+			save_metrics_json(metrics, metrics_path)
+			print(f"Saved metrics summary to {metrics_path}")
+
+			model_path = run_dir / "trained_model.joblib"
+			joblib.dump({"model": model, "config": asdict(local_cfg), "feature_names": dmd_feature_names}, model_path)
+			print(f"Saved trained model to {model_path}")
+
+		if cfg.export_model_path:
+			target_path = cfg.export_model_path
+			if cfg.compare_classifiers:
+				target_path = target_path.with_name(f"{target_path.stem}_{classifier_name}{target_path.suffix}")
+			target_path.parent.mkdir(parents=True, exist_ok=True)
+			joblib.dump({"model": model, "config": asdict(local_cfg), "feature_names": dmd_feature_names}, target_path)
+			print(f"Persisted trained model to {target_path}")
+
+	if cfg.compare_classifiers:
+		comparison_table = []
+		for record in comparison_records:
+			metrics = record["metrics"]
+			comparison_table.append({
+				"classifier": record["classifier"],
+				"roc_auc": metrics.get("roc_auc"),
+				"cv_mean": metrics.get("cv_roc_auc_mean"),
+				"cv_std": metrics.get("cv_roc_auc_std"),
+				"accuracy": metrics.get("accuracy"),
+				"f1": metrics.get("f1"),
+			})
+		best_model = max(comparison_records, key=lambda item: item["metrics"].get("roc_auc", 0.0))
+		print("\n=== Classifier comparison (ROC AUC focus) ===")
+		for row in comparison_table:
+			print(
+				f"  {row['classifier']:<20} | ROC-AUC={row['roc_auc']:.4f} | CV={row['cv_mean']:.4f}±{row['cv_std']:.4f} | Acc={row['accuracy']:.4f} | F1={row['f1']:.4f}"
+			)
+		print(f"\nBest performer (by ROC AUC): {best_model['classifier']}")
+		if artifact_dir:
+			comparison_path = artifact_dir / "classifier_comparison.json"
+			with comparison_path.open("w", encoding="utf-8") as fh:
+				json.dump(comparison_table, fh, indent=2)
+			print(f"Stored classifier comparison to {comparison_path}")
 
 
 if __name__ == "__main__":
