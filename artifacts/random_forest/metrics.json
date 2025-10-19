@@ -20,6 +20,7 @@
     "clf__min_samples_leaf": 1,
     "clf__min_samples_split": 10
   },
+  "training_seconds": 52.706692873000065,
   "cv_roc_auc_mean": 0.9937134629998144,
   "cv_roc_auc_std": 0.00045637568895129886,
   "pca": {

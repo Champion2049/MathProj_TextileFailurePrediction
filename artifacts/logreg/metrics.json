@@ -19,6 +19,7 @@
     "clf__C": 0.1,
     "clf__penalty": "l2"
   },
+  "training_seconds": 2.4410192609998376,
   "cv_roc_auc_mean": 0.9754389085098273,
   "cv_roc_auc_std": 0.005853649039595609,
   "pca": {

@@ -19,6 +19,7 @@ import argparse
 import json
 from dataclasses import dataclass, asdict, replace
 from pathlib import Path
+from time import perf_counter
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -697,6 +698,7 @@ def train_and_evaluate(
 
 	best_params = None
 	if cfg.grid_search:
+		fit_start = perf_counter()
 		search = GridSearchCV(
 			pipeline,
 			param_grid=param_grid,
@@ -707,8 +709,11 @@ def train_and_evaluate(
 		search.fit(X_train, y_train)
 		pipeline = search.best_estimator_
 		best_params = search.best_params_
+		training_seconds = perf_counter() - fit_start
 	else:
+		fit_start = perf_counter()
 		pipeline.fit(X_train, y_train)
+		training_seconds = perf_counter() - fit_start
 
 	y_pred = pipeline.predict(X_test)
 	y_proba = pipeline.predict_proba(X_test)[:, 1]
@@ -729,6 +734,8 @@ def train_and_evaluate(
 
 	if best_params is not None:
 		metrics["best_params"] = best_params
+
+	metrics["training_seconds"] = float(training_seconds)
 
 	cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=cfg.random_state)
 	cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring="roc_auc")
@@ -778,6 +785,7 @@ def pretty_print_metrics(metrics: dict) -> None:
 		("ROC AUC", "roc_auc"),
 		("CV ROC AUC (mean)", "cv_roc_auc_mean"),
 		("CV ROC AUC (std)", "cv_roc_auc_std"),
+ 		("Training time (s)", "training_seconds"),
 	]
 
 	print("\nPerformance summary:")
@@ -1068,6 +1076,7 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 				"cv_std": metrics.get("cv_roc_auc_std"),
 				"accuracy": metrics.get("accuracy"),
 				"f1": metrics.get("f1"),
+ 				"training_seconds": metrics.get("training_seconds"),
 			})
 		best_model = max(comparison_records, key=lambda item: item["metrics"].get("roc_auc", 0.0))
 		print("\n=== Classifier comparison (ROC AUC focus) ===")
@@ -1092,12 +1101,32 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 					"cv_std": metrics.get("cv_roc_auc_std"),
 					"accuracy": metrics.get("accuracy"),
 					"f1": metrics.get("f1"),
+ 					"training_seconds": metrics.get("training_seconds"),
 				})
 			print("\n=== Baseline (raw) classifier summary ===")
 			for row in baseline_summary:
 				print(
 					f"  {row['classifier']:<20} | ROC-AUC={row['roc_auc']:.4f} | CV={row['cv_mean']:.4f}±{row['cv_std']:.4f} | Acc={row['accuracy']:.4f} | F1={row['f1']:.4f}"
 				)
+			baseline_lookup = {row["classifier"]: row for row in baseline_summary}
+			dmd_lookup = {row["classifier"]: row for row in comparison_table}
+			shared_classifiers = sorted(set(baseline_lookup) & set(dmd_lookup))
+			if shared_classifiers:
+				print("\n=== Tensor DMD vs Raw (training time & ROC-AUC deltas) ===")
+				for name in shared_classifiers:
+					dmd_metrics = dmd_lookup[name]
+					raw_metrics = baseline_lookup[name]
+					time_delta = None
+					if dmd_metrics.get("training_seconds") is not None and raw_metrics.get("training_seconds") is not None:
+						time_delta = dmd_metrics["training_seconds"] - raw_metrics["training_seconds"]
+					roc_delta = None
+					if dmd_metrics.get("roc_auc") is not None and raw_metrics.get("roc_auc") is not None:
+						roc_delta = dmd_metrics["roc_auc"] - raw_metrics["roc_auc"]
+					time_text = f"{time_delta:+.2f}" if time_delta is not None else "N/A"
+					roc_text = f"{roc_delta:+.4f}" if roc_delta is not None else "N/A"
+					print(
+						f"  {name:<20} | ΔROC-AUC={roc_text} | ΔTrain(s)={time_text}"
+					)
 			if artifact_dir:
 				baseline_path = artifact_dir / "baseline_vs_dmd.json"
 				bundle = {
