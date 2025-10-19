@@ -1,0 +1,78 @@
+{
+  "accuracy": 0.8547094188376754,
+  "precision": 0.7272727272727273,
+  "recall": 0.8634920634920635,
+  "f1": 0.7895500725689405,
+  "roc_auc": 0.9125659438983011,
+  "confusion_matrix": [
+    [
+      581,
+      102
+    ],
+    [
+      43,
+      272
+    ]
+  ],
+  "classification_report": "              precision    recall  f1-score   support\n\n           0       0.93      0.85      0.89       683\n           1       0.73      0.86      0.79       315\n\n    accuracy                           0.85       998\n   macro avg       0.83      0.86      0.84       998\nweighted avg       0.87      0.85      0.86       998\n",
+  "best_params": {
+    "clf__C": 0.1,
+    "clf__penalty": "l2"
+  },
+  "cv_roc_auc_mean": 0.9072706792782954,
+  "cv_roc_auc_std": 0.013081410943194446,
+  "classifier": "logreg",
+  "variant": "baseline_raw",
+  "top_features": [
+    {
+      "feature": "pca_component_0",
+      "score": 0.7252659766624876,
+      "weight": 0.7252659766624876
+    },
+    {
+      "feature": "pca_component_10",
+      "score": 0.12948568560868629,
+      "weight": 0.12948568560868629
+    },
+    {
+      "feature": "pca_component_6",
+      "score": 0.11330978764831046,
+      "weight": 0.11330978764831046
+    },
+    {
+      "feature": "pca_component_7",
+      "score": 0.11306115449023764,
+      "weight": 0.11306115449023764
+    },
+    {
+      "feature": "pca_component_3",
+      "score": 0.1074227334714992,
+      "weight": -0.1074227334714992
+    },
+    {
+      "feature": "pca_component_2",
+      "score": 0.07344555322950848,
+      "weight": -0.07344555322950848
+    },
+    {
+      "feature": "pca_component_4",
+      "score": 0.06362713119334246,
+      "weight": 0.06362713119334246
+    },
+    {
+      "feature": "pca_component_5",
+      "score": 0.054144936820015505,
+      "weight": -0.054144936820015505
+    },
+    {
+      "feature": "pca_component_8",
+      "score": 0.039169210051336396,
+      "weight": 0.039169210051336396
+    },
+    {
+      "feature": "pca_component_1",
+      "score": 0.03503120871133196,
+      "weight": -0.03503120871133196
+    }
+  ]
+}

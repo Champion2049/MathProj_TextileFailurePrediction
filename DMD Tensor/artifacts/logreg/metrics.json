@@ -39,6 +39,7 @@
     "cumulative_explained_variance": 0.9599580065698424
   },
   "classifier": "logreg",
+  "variant": "tensor_dmd",
   "top_features": [
     {
       "feature": "sv_energy_5",

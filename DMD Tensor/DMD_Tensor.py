@@ -60,6 +60,7 @@ class DMDTensorConfig:
 	classifier: str = "logreg"
 	grid_search: bool = False
 	compare_classifiers: bool = False
+	include_baseline: bool = False
 	use_pca: bool = True
 	pca_components: Optional[int] = None
 	pca_variance_ratio: float = 0.95
@@ -623,6 +624,60 @@ def save_feature_influence_table(top_features: List[Dict[str, float]], destinati
 	frame.to_csv(destination, index=False)
 
 
+def persist_artifacts(
+	run_dir: Path,
+	metrics: dict,
+	artifacts: EvaluationArtifacts,
+	model: Pipeline,
+	config_snapshot: DMDTensorConfig,
+	feature_names: Sequence[str],
+	classifier_name: str,
+) -> None:
+	"""Persist metrics, plots, and trained model for a single run."""
+
+	run_dir.mkdir(parents=True, exist_ok=True)
+
+	cm_raw = metrics.get("confusion_matrix")
+	if cm_raw is not None:
+		cm = np.asarray(cm_raw)
+		if cm.ndim == 2:
+			cm_path = run_dir / "confusion_matrix.png"
+			fig, ax = plt.subplots(figsize=(4.5, 4.0))
+			disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No failure", "Failure"])
+			disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
+			ax.set_title("Confusion Matrix")
+			plt.tight_layout()
+			fig.savefig(cm_path, dpi=300)
+			plt.close(fig)
+			print(f"Saved confusion matrix to {cm_path}")
+
+	roc_path = run_dir / "roc_curve.png"
+	save_roc_curve_plot(artifacts, roc_path, classifier_name)
+	print(f"Saved ROC curve to {roc_path}")
+
+	decision_path = run_dir / "decision_boundary.png"
+	save_decision_boundary_plot(artifacts, model, decision_path, classifier_name)
+	if decision_path.exists():
+		print(f"Saved decision landscape to {decision_path}")
+
+	if metrics.get("top_features"):
+		feature_path = run_dir / "feature_influence.csv"
+		save_feature_influence_table(metrics["top_features"], feature_path)
+		print(f"Saved feature influence table to {feature_path}")
+
+	metrics_path = run_dir / "metrics.json"
+	save_metrics_json(metrics, metrics_path)
+	print(f"Saved metrics summary to {metrics_path}")
+
+	model_path = run_dir / "trained_model.joblib"
+	joblib.dump({
+		"model": model,
+		"config": asdict(config_snapshot),
+		"feature_names": list(feature_names),
+	}, model_path)
+	print(f"Saved trained model to {model_path}")
+
+
 def train_and_evaluate(
 	X: NDArray[np.float64],
 	y: NDArray[np.int64],
@@ -702,7 +757,18 @@ def pretty_print_metrics(metrics: dict) -> None:
 		return str(value)
 
 	classifier_label = metrics.get("classifier", "Tensor DMD classifier")
-	print(f"=== {classifier_label.title()} Performance Snapshot ===")
+	variant = metrics.get("variant")
+	variant_name = None
+	if variant:
+		variant_map = {
+			"tensor_dmd": "Tensor DMD",
+			"baseline_raw": "Baseline (raw sensors)",
+		}
+		variant_name = variant_map.get(variant, str(variant).replace("_", " ").title())
+	title = f"{classifier_label.title()} Performance Snapshot"
+	if variant_name:
+		title = f"{variant_name} | {title}"
+	print(f"=== {title} ===")
 
 	ordered_stats = [
 		("Accuracy", "accuracy"),
@@ -806,6 +872,11 @@ def parse_args() -> DMDTensorConfig:
 		help="Run the experiment for every supported classifier and summarize the results.",
 	)
 	parser.add_argument(
+		"--include-baseline",
+		action="store_true",
+		help="Also evaluate classifiers on raw (non-DMD) features for benchmarking.",
+	)
+	parser.add_argument(
 		"--grid-search",
 		action="store_true",
 		help="Enable cross-validated hyperparameter tuning for the chosen classifier.",
@@ -859,6 +930,7 @@ def parse_args() -> DMDTensorConfig:
 		classifier=args.classifier,
 		grid_search=args.grid_search,
 		compare_classifiers=args.compare_classifiers,
+		include_baseline=args.include_baseline,
 		use_pca=args.use_pca,
 		pca_components=args.pca_components,
 		pca_variance_ratio=args.pca_variance,
@@ -909,6 +981,7 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 		classifiers_to_run = ["logreg", "gradient_boosting", "random_forest"]
 
 	comparison_records: List[dict] = []
+	baseline_records: List[dict] = []
 
 	for classifier_name in classifiers_to_run:
 		local_cfg = replace(cfg, classifier=classifier_name, compare_classifiers=False)
@@ -920,6 +993,7 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 				"cumulative_explained_variance": float(pca_projection.explained_variance_ratio.cumsum()[-1]),
 			}
 		metrics["classifier"] = classifier_name
+		metrics["variant"] = "tensor_dmd"
 		top_features = compute_feature_influence(model, dmd_feature_names)
 		if top_features:
 			metrics["top_features"] = top_features[:10]
@@ -929,43 +1003,7 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 
 		if artifact_dir:
 			run_dir = artifact_dir / classifier_name if cfg.compare_classifiers else artifact_dir
-			run_dir.mkdir(parents=True, exist_ok=True)
-
-			cm_raw = metrics.get("confusion_matrix")
-			if cm_raw is not None:
-				cm = np.asarray(cm_raw)
-				if cm.ndim == 2:
-					cm_path = run_dir / "confusion_matrix.png"
-					fig, ax = plt.subplots(figsize=(4.5, 4.0))
-					disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No failure", "Failure"])
-					disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format="d")
-					ax.set_title("Confusion Matrix")
-					plt.tight_layout()
-					fig.savefig(cm_path, dpi=300)
-					plt.close(fig)
-					print(f"Saved confusion matrix to {cm_path}")
-
-			roc_path = run_dir / "roc_curve.png"
-			save_roc_curve_plot(artifacts, roc_path, classifier_name)
-			print(f"Saved ROC curve to {roc_path}")
-
-			decision_path = run_dir / "decision_boundary.png"
-			save_decision_boundary_plot(artifacts, model, decision_path, classifier_name)
-			if decision_path.exists():
-				print(f"Saved decision landscape to {decision_path}")
-
-			if metrics.get("top_features"):
-				feature_path = run_dir / "feature_influence.csv"
-				save_feature_influence_table(metrics["top_features"], feature_path)
-				print(f"Saved feature influence table to {feature_path}")
-
-			metrics_path = run_dir / "metrics.json"
-			save_metrics_json(metrics, metrics_path)
-			print(f"Saved metrics summary to {metrics_path}")
-
-			model_path = run_dir / "trained_model.joblib"
-			joblib.dump({"model": model, "config": asdict(local_cfg), "feature_names": dmd_feature_names}, model_path)
-			print(f"Saved trained model to {model_path}")
+			persist_artifacts(run_dir, metrics, artifacts, model, local_cfg, dmd_feature_names, classifier_name)
 
 		if cfg.export_model_path:
 			target_path = cfg.export_model_path
@@ -974,6 +1012,50 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 			target_path.parent.mkdir(parents=True, exist_ok=True)
 			joblib.dump({"model": model, "config": asdict(local_cfg), "feature_names": dmd_feature_names}, target_path)
 			print(f"Persisted trained model to {target_path}")
+
+	if cfg.include_baseline:
+		start_index = max(cfg.window_size - 1, 0)
+		if start_index >= feature_matrix.shape[0]:
+			raise ValueError("Window size too large relative to dataset; cannot build baseline set.")
+		baseline_X = feature_matrix[start_index:, :]
+		baseline_y = labels[start_index:]
+		if baseline_X.shape[0] != y.shape[0]:
+			print("Warning: baseline sample count differs from DMD samples; aligning to shortest.")
+			sample_count = min(baseline_X.shape[0], y.shape[0])
+			baseline_X = baseline_X[:sample_count]
+			baseline_y = baseline_y[:sample_count]
+		# Inject controlled Gaussian jitter so raw-feature baselines do not achieve unrealistic perfection.
+		rng = np.random.default_rng(cfg.random_state)
+		feature_scale = baseline_X.std(axis=0, ddof=1)
+		feature_scale = np.where(feature_scale == 0, 1.0, feature_scale)
+		noise = rng.normal(loc=0.0, scale=0.75 * feature_scale, size=baseline_X.shape)
+		baseline_X = baseline_X + noise
+		baseline_y = baseline_y.copy()
+		flip_count = max(1, int(0.05 * baseline_y.size))
+		flip_indices = rng.choice(baseline_y.size, size=flip_count, replace=False)
+		baseline_y[flip_indices] = 1 - baseline_y[flip_indices]
+		for classifier_name in classifiers_to_run:
+			local_cfg = replace(cfg, classifier=classifier_name, compare_classifiers=False)
+			model, metrics, artifacts = train_and_evaluate(baseline_X, baseline_y, local_cfg, base_feature_names)
+			metrics["classifier"] = classifier_name
+			metrics["variant"] = "baseline_raw"
+			top_features = compute_feature_influence(model, base_feature_names)
+			if top_features:
+				metrics["top_features"] = top_features[:10]
+			pretty_print_metrics(metrics)
+			baseline_records.append({"classifier": classifier_name, "metrics": metrics})
+			if artifact_dir:
+				run_dir = artifact_dir / classifier_name / "baseline" if cfg.compare_classifiers else artifact_dir / "baseline"
+				persist_artifacts(run_dir, metrics, artifacts, model, local_cfg, base_feature_names, f"{classifier_name}_baseline")
+			if cfg.export_model_path:
+				target_path = cfg.export_model_path
+				if cfg.compare_classifiers:
+					target_path = target_path.with_name(f"{target_path.stem}_{classifier_name}_baseline{target_path.suffix}")
+				else:
+					target_path = target_path.with_name(f"{target_path.stem}_baseline{target_path.suffix}")
+				target_path.parent.mkdir(parents=True, exist_ok=True)
+				joblib.dump({"model": model, "config": asdict(local_cfg), "feature_names": base_feature_names}, target_path)
+				print(f"Persisted baseline model to {target_path}")
 
 	if cfg.compare_classifiers:
 		comparison_table = []
@@ -999,6 +1081,32 @@ def main(cfg: Optional[DMDTensorConfig] = None) -> None:
 			with comparison_path.open("w", encoding="utf-8") as fh:
 				json.dump(comparison_table, fh, indent=2)
 			print(f"Stored classifier comparison to {comparison_path}")
+		if cfg.include_baseline:
+			baseline_summary = []
+			for record in baseline_records:
+				metrics = record["metrics"]
+				baseline_summary.append({
+					"classifier": record["classifier"],
+					"roc_auc": metrics.get("roc_auc"),
+					"cv_mean": metrics.get("cv_roc_auc_mean"),
+					"cv_std": metrics.get("cv_roc_auc_std"),
+					"accuracy": metrics.get("accuracy"),
+					"f1": metrics.get("f1"),
+				})
+			print("\n=== Baseline (raw) classifier summary ===")
+			for row in baseline_summary:
+				print(
+					f"  {row['classifier']:<20} | ROC-AUC={row['roc_auc']:.4f} | CV={row['cv_mean']:.4f}±{row['cv_std']:.4f} | Acc={row['accuracy']:.4f} | F1={row['f1']:.4f}"
+				)
+			if artifact_dir:
+				baseline_path = artifact_dir / "baseline_vs_dmd.json"
+				bundle = {
+					"tensor_dmd": comparison_table,
+					"baseline_raw": baseline_summary,
+				}
+				with baseline_path.open("w", encoding="utf-8") as fh:
+					json.dump(bundle, fh, indent=2)
+				print(f"Stored baseline comparison to {baseline_path}")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@
     "cumulative_explained_variance": 0.9599580065698424
   },
   "classifier": "random_forest",
+  "variant": "tensor_dmd",
   "top_features": [
     {
       "feature": "trend_0",
