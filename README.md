@@ -89,10 +89,6 @@ To avoid misleading perfection, the comparison injects Gaussian jitter plus a 5%
    - Feature importance tables (`feature_influence.csv`) and trained models (`trained_model.joblib`).
 3. Use the stored JSON/CSV outputs to populate the IEEE-style report or presentation materials.
 
-## Reporting and presentation
-
-- The LaTeX manuscript (IEEEtran format) covers: Abstract, Introduction, Dataset, Methodology (DMD, HO-SVD, SVM, RKHS), Experiments, Conclusion, and Acknowledgments.
-- Slides focus on: telemetry overview, PCA + tensorisation pipeline, DMD feature extraction, classifier comparison, key metrics, and interpretability artefacts.
 
 ## Contributing
 
