@@ -20,6 +20,7 @@
     "clf__max_depth": 3,
     "clf__n_estimators": 250
   },
+  "training_seconds": 75.96866923299967,
   "cv_roc_auc_mean": 0.9970042948321272,
   "cv_roc_auc_std": 0.0008111467215624987,
   "pca": {

@@ -20,6 +20,7 @@
     "clf__min_samples_leaf": 4,
     "clf__min_samples_split": 10
   },
+  "training_seconds": 27.4905426790001,
   "cv_roc_auc_mean": 0.9179142413811665,
   "cv_roc_auc_std": 0.01129467552230855,
   "classifier": "random_forest",

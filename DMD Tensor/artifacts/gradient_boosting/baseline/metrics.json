@@ -20,6 +20,7 @@
     "clf__max_depth": 2,
     "clf__n_estimators": 250
   },
+  "training_seconds": 11.054240500000105,
   "cv_roc_auc_mean": 0.9169290563240111,
   "cv_roc_auc_std": 0.011593489739302316,
   "classifier": "gradient_boosting",

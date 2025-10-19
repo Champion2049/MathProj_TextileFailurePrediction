@@ -19,6 +19,7 @@
     "clf__C": 0.1,
     "clf__penalty": "l2"
   },
+  "training_seconds": 0.08364633899964247,
   "cv_roc_auc_mean": 0.9072706792782954,
   "cv_roc_auc_std": 0.013081410943194446,
   "classifier": "logreg",
